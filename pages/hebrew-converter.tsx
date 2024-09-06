@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { HebrewLetterInfo, hebrewLetterSchema } from '../utils/hebrewLetterSchema';
 
@@ -16,9 +16,11 @@ export default function HebrewConverter() {
   const [error, setError] = useState<string | null>(null);
   const [speed, setSpeed] = useState(1);
   const [amplitude, setAmplitude] = useState(1);
-  const [volume, setVolume] = useState(0.2);
+  const [volume, setVolume] = useState(1);
   const [selectedLetter, setSelectedLetter] = useState<LetterSoundInfo | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const compressorRef = useRef<DynamicsCompressorNode | null>(null);
+  const masterGainRef = useRef<GainNode | null>(null);
 
   const generateFrequencyBasedMapping = (text: string) => {
     const letterCounts: {[key: string]: number} = {};
@@ -112,24 +114,45 @@ export default function HebrewConverter() {
     }
   }, [hebrewText, mapping]);
 
-  const playSound = (frequency: number, duration: number, letterAmplitude: number) => {
+  useEffect(() => {
     if (!audioContextRef.current) {
       audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      compressorRef.current = audioContextRef.current.createDynamicsCompressor();
+      masterGainRef.current = audioContextRef.current.createGain();
+
+      compressorRef.current.threshold.setValueAtTime(-50, audioContextRef.current.currentTime);
+      compressorRef.current.knee.setValueAtTime(40, audioContextRef.current.currentTime);
+      compressorRef.current.ratio.setValueAtTime(12, audioContextRef.current.currentTime);
+      compressorRef.current.attack.setValueAtTime(0, audioContextRef.current.currentTime);
+      compressorRef.current.release.setValueAtTime(0.25, audioContextRef.current.currentTime);
+
+      compressorRef.current.connect(masterGainRef.current);
+      masterGainRef.current.connect(audioContextRef.current.destination);
     }
+  }, []);
+
+  useEffect(() => {
+    if (masterGainRef.current && audioContextRef.current) {
+      masterGainRef.current.gain.setValueAtTime(volume * 2, audioContextRef.current.currentTime);
+    }
+  }, [volume]);
+
+  const playSound = (frequency: number, duration: number, letterAmplitude: number) => {
+    if (!audioContextRef.current || !compressorRef.current) return;
+
     const ctx = audioContextRef.current;
     const oscillator = ctx.createOscillator();
     const gainNode = ctx.createGain();
 
     oscillator.type = 'sine';
     oscillator.frequency.setValueAtTime(frequency, ctx.currentTime);
-    
-    const baseVolume = 0.5;
-    const volumeMultiplier = 5;
-    gainNode.gain.setValueAtTime(baseVolume * letterAmplitude * amplitude * (volume * volumeMultiplier), ctx.currentTime);
+
+    const scaledAmplitude = letterAmplitude * amplitude * 2;
+    gainNode.gain.setValueAtTime(scaledAmplitude, ctx.currentTime);
     gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration / speed);
 
     oscillator.connect(gainNode);
-    gainNode.connect(ctx.destination);
+    gainNode.connect(compressorRef.current);
 
     oscillator.start();
     oscillator.stop(ctx.currentTime + duration / speed);
@@ -194,13 +217,13 @@ export default function HebrewConverter() {
             id="volume"
             type="range"
             min="0"
-            max="1"
+            max="2"
             step="0.01"
             value={volume}
             onChange={(e) => setVolume(parseFloat(e.target.value))}
             className="w-32"
           />
-          <span className="ml-2">{(volume * 100).toFixed(0)}%</span>
+          <span className="ml-2">{(volume * 50).toFixed(0)}%</span>
         </div>
       </div>
       {soundProperties.length > 0 && (
